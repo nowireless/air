@@ -174,13 +174,13 @@ func ReadSensorData(client *modbus.ModbusClient) (*SensorData, error) {
 		return nil, err
 	}
 
-	slog.With(
-		"humidity", humidity,
-		"tempF", tempF,
-		"tempC", tempC,
-		"dewPointC", dewPointC,
-		"dewPointF", dewPointF,
-	).Debug("Sensor Readings")
+	// slog.With(
+	// 	"humidity", humidity,
+	// 	"tempF", tempF,
+	// 	"tempC", tempC,
+	// 	"dewPointC", dewPointC,
+	// 	"dewPointF", dewPointF,
+	// ).Debug("Sensor Readings")
 
 	return &SensorData{
 		Humidity:     humidity,
