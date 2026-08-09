@@ -2,6 +2,7 @@ package main
 
 import (
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -11,8 +12,8 @@ import (
 )
 
 type Collector struct {
-	client *modbus.ModbusClient
-	mu     sync.Mutex
+	// client *modbus.ModbusClient
+	mu sync.Mutex
 
 	humidity     *prometheus.Desc
 	temperature  *prometheus.Desc
@@ -21,9 +22,9 @@ type Collector struct {
 	readDuration *prometheus.Desc
 }
 
-func NewCollector(client *modbus.ModbusClient) *Collector {
+func NewCollector() *Collector {
 	return &Collector{
-		client: client,
+		// client: client,
 
 		humidity: prometheus.NewDesc(
 			"banner_s24_relative_humidity_ratio",
@@ -77,7 +78,33 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 
 	start := time.Now()
 
-	readings, err := banners24.ReadSensorData(c.client)
+	client, err := modbus.NewClient(&modbus.ClientConfiguration{
+		URL:     "tcp://192.168.2.188:502",
+		Timeout: 1 * time.Second,
+	})
+	defer client.Close()
+	if err != nil {
+		slog.Error("Failed to create modbus client", "err", err)
+		os.Exit(1)
+	}
+
+	client.SetUnitId(1)
+
+	slog.Info("Opening modbus client")
+	if err := client.Open(); err != nil {
+		slog.Error("Failed to open modbus client", "err", err)
+
+		ch <- prometheus.MustNewConstMetric(
+			c.up,
+			prometheus.GaugeValue,
+			0,
+		)
+
+		// Do not emit stale or invented sensor values.
+		return
+	}
+
+	readings, err := banners24.ReadSensorData(client)
 
 	ch <- prometheus.MustNewConstMetric(
 		c.readDuration,
