@@ -266,6 +266,12 @@ func collectMetrics(m *ModBusSession) (*Metrics, error) {
 				Value: register.Value,
 				Time:  dataTimeStamp,
 			})
+
+			metrics.Samples = append(metrics.Samples, Sample{
+				Name:  register.Name + "_raw",
+				Value: float64(register.RawValue),
+				Time:  dataTimeStamp,
+			})
 		}
 
 		for _, registerRange := range unit.RegisterRanges {
@@ -298,6 +304,12 @@ func collectMetrics(m *ModBusSession) (*Metrics, error) {
 				metrics.Samples = append(metrics.Samples, Sample{
 					Name:  register.Name,
 					Value: register.Value,
+					Time:  dataTimeStamp,
+				})
+
+				metrics.Samples = append(metrics.Samples, Sample{
+					Name:  register.Name + "_raw",
+					Value: float64(register.RawValue),
 					Time:  dataTimeStamp,
 				})
 			}
