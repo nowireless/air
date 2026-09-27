@@ -1,11 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/lmittmann/tint"
+	"github.com/samber/lo"
 	"github.com/simonvetter/modbus"
 )
 
@@ -23,10 +26,10 @@ type Register struct {
 	Register uint16
 	Type     modbus.RegType
 
-	Value    any
+	Value    float64
 	RawValue uint16
 
-	Transform func(rawValue uint16) (any, error)
+	Transform func(rawValue uint16) (float64, error)
 }
 
 type RegisterRange struct {
@@ -40,10 +43,10 @@ type RegisterRange struct {
 type RegisterRangeElement struct {
 	Name string
 
-	Value    any
+	Value    float64
 	RawValue uint16
 
-	Transform func(rawValue uint16) (any, error)
+	Transform func(rawValue uint16) (float64, error)
 }
 
 // func (r *RegisterValue[T]) Process(rawValue uint16) error {
@@ -64,17 +67,11 @@ func main() {
 	// Set global logger with custom options
 	slog.SetDefault(slog.New(
 		tint.NewTextHandler(os.Stderr, &tint.Options{
-			Level:      slog.LevelDebug,
+			Level:      slog.LevelInfo,
 			TimeFormat: time.Kitchen,
 		}),
 	))
 	slog.Info("Laser Compressed Air Filtration collector")
-
-	testReadAll()
-}
-
-func testReadAll() {
-	slog.Info("Performing test read of all sensors")
 
 	m, err := Connect("tcp://172.30.0.140:502")
 	defer m.Close()
@@ -82,32 +79,73 @@ func testReadAll() {
 		slog.Error("Failed to create modbus client", "err", err)
 
 		// Do not emit stale or invented sensor values.
+		// return nil, err
 		return
 	}
+
+	metrics, err := collectMetrics(m)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, sample := range metrics.Samples {
+		fmt.Println(sample)
+	}
+}
+
+type Metrics struct {
+	Samples []Sample
+}
+
+type Sample struct {
+	Name   string
+	Labels map[string]string
+	Value  float64
+	time.Time
+}
+
+func (s Sample) String() string {
+	return fmt.Sprintf("%s{%s} %v %d",
+		s.Name,
+		strings.Join(
+			lo.MapToSlice(s.Labels, func(k, v string) string {
+				return fmt.Sprintf(`%s="%s"`, k, v)
+			}),
+			",",
+		),
+		s.Value,
+		s.Time.UnixMilli(),
+	)
+}
+
+func collectMetrics(m *ModBusSession) (*Metrics, error) {
+	var err error
+	start := time.Now()
+	slog.Info("Reading of all sensors")
 
 	//
 	// Gather all data
 	//
-	transformBannerHumidity := func(rawValue uint16) (any, error) {
+	transformBannerHumidity := func(rawValue uint16) (float64, error) {
 		return float64(rawValue) / 100.0, nil
 	}
 
-	transformBannerTemp := func(rawValue uint16) (any, error) {
+	transformBannerTemp := func(rawValue uint16) (float64, error) {
 		return float64(int16(rawValue)) / 20.0, nil
 	}
 
-	transformBannerDewPoint := func(rawValue uint16) (any, error) {
+	transformBannerDewPoint := func(rawValue uint16) (float64, error) {
 		return float64(int16(rawValue)) / 100.0, nil
 	}
 
-	transformWaveSharePressureSensor := func(rawValue uint16) (any, error) {
+	transformWaveSharePressureSensor := func(rawValue uint16) (float64, error) {
 		voltage := float64(rawValue / 1000.0)
 
 		vcc := 5.0
 		return float64(250.0*(float64(voltage)/vcc) - 25.0), nil
 	}
 
-	transformIFMSD6001Flow := func(rawValue uint16) (any, error) {
+	transformIFMSD6001Flow := func(rawValue uint16) (float64, error) {
 		// ASP and AEP need to make sensor config
 		asp := 0.0
 		aep := 44.1
@@ -167,11 +205,11 @@ func testReadAll() {
 
 	for _, unit := range units {
 		logCtx := slog.With("unit.id", unit.ID, "unit.name", unit.Name)
-		logCtx.Info("Fetching data")
+		logCtx.Debug("Fetching data")
 
 		if err := m.SetUnitId(unit.ID); err != nil {
 			logCtx.Error("Failed to set modbus unit id", "err", err)
-			return
+			return nil, err
 		}
 
 		for _, register := range unit.Registers {
@@ -184,19 +222,13 @@ func testReadAll() {
 			rawValue, err := m.ReadRegister(register.Register, register.Type)
 			if err != nil {
 				logCtx.Error("Failed to read register", "err", err)
-				return
+				return nil, err
 			}
 
 			register.RawValue = rawValue
-			register.Value, err = register.Transform(rawValue)
-			if err != nil {
-				logCtx.Error("Failed to transform raw value", "err", err)
-				return
-			}
 
 			logCtx.Debug("Read Register",
 				"rawValue", rawValue,
-				"value", register.Value,
 			)
 		}
 
@@ -215,7 +247,7 @@ func testReadAll() {
 
 			if err != nil {
 				logCtx.Error("Failed to read register", "err", err)
-				return
+				return nil, err
 			}
 
 			if len(rawValues) != len(registerRange.Registers) {
@@ -223,7 +255,7 @@ func testReadAll() {
 					"len(rawValues)", len(rawValues),
 					"len(registerRange.Registers)", len(registerRange.Registers),
 				).Error("Unexpected number of raw values retrieved from device")
-				return
+				return nil, fmt.Errorf("unexpected number of raw values retrieved from device")
 			}
 
 			for i, register := range registerRange.Registers {
@@ -235,29 +267,94 @@ func testReadAll() {
 				}
 
 				register.RawValue = rawValues[i]
-				register.Value, err = register.Transform(register.RawValue)
-				if err != nil {
-					logCtx.Error("Failed to transform raw value", "err", err)
-					return
-				}
 
 				logCtx.Debug("Read Register",
 					"name", register.Name,
 					"rawValue", register.RawValue,
-					"value", register.Value,
 				)
 			}
 
 		}
-		logCtx.Info("Done")
+		logCtx.Debug("Done")
 	}
+
+	dataTimeStamp := time.Now()
 
 	//
 	// Transform
 	//
+	metrics := &Metrics{}
 
-	//
-	// Display
-	//
+	for _, unit := range units {
+		logCtx := slog.With("unit.id", unit.ID, "unit.name", unit.Name)
+		logCtx.Debug("Transforming data")
 
+		for _, register := range unit.Registers {
+			logCtx := logCtx.With(
+				"register.Name", register.Name,
+				"register.Register", register.Register,
+			)
+			logCtx.Debug("Reading Register")
+
+			register.Value, err = register.Transform(register.RawValue)
+			if err != nil {
+				logCtx.Error("Failed to transform raw value", "err", err)
+				return nil, err
+			}
+
+			logCtx.Debug("Transformed Register",
+				"rawValue", register.RawValue,
+				"value", register.Value,
+			)
+
+			metrics.Samples = append(metrics.Samples, Sample{
+				Name:  register.Name,
+				Value: register.Value,
+				Time:  dataTimeStamp,
+			})
+		}
+
+		for _, registerRange := range unit.RegisterRanges {
+			logCtx := logCtx.With(
+				"registerRange.Type", registerRange.Type,
+				"registerRange.StartRegister", registerRange.StartRegister,
+			)
+			logCtx.Debug("Transforming Register range")
+
+			for i, register := range registerRange.Registers {
+				if register == nil {
+					logCtx.With(
+						"registerOffset", i,
+					).Debug("Skipping register")
+					continue
+				}
+
+				register.Value, err = register.Transform(register.RawValue)
+				if err != nil {
+					logCtx.Error("Failed to transform raw value", "err", err)
+					return nil, err
+				}
+
+				logCtx.Debug("Transformed Register",
+					"name", register.Name,
+					"rawValue", register.RawValue,
+					"value", register.Value,
+				)
+
+				metrics.Samples = append(metrics.Samples, Sample{
+					Name:  register.Name,
+					Value: register.Value,
+					Time:  dataTimeStamp,
+				})
+			}
+
+		}
+		logCtx.Debug("Done")
+	}
+
+	slog.With(
+		"collectTime", time.Since(start),
+	).Info("Read sensors")
+
+	return metrics, nil
 }
