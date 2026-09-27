@@ -102,10 +102,13 @@ func collectMetrics(m *ModBusSession) (*Metrics, error) {
 	}
 
 	transformIFMSD6001Flow := func(rawValue uint16) (float64, error) {
+		mA := float64(rawValue) / 1000.0
+
 		// ASP and AEP need to make sensor config
 		asp := 0.0
 		aep := 44.1
-		return (asp + (float64(rawValue)-4000.0)/16000.0*(aep-asp)), nil
+		return (asp + (mA-4.0)/16.0*(aep-asp)), nil
+		// (0 + (mA-4.0)/16.0*(44.1-0))
 	}
 
 	units := []*Unit{
