@@ -99,6 +99,29 @@ func (m *ModBusSession) ReadRegister(reg uint16, regType modbus.RegType) (uint16
 	return rawValue, nil
 }
 
+func (m *ModBusSession) ReadRegisters(startingReg uint16, quantity uint16, regType modbus.RegType) ([]uint16, error) {
+	if m == nil {
+		return nil, fmt.Errorf("modbus session is nil")
+	}
+
+	if m.Client == nil {
+		return nil, fmt.Errorf("modbus client is nil")
+	}
+
+	rawValues, err := m.Client.ReadRegisters(startingReg, quantity, regType)
+	if err != nil {
+		return nil, err
+	}
+
+	slog.With(
+		"startingReg", startingReg,
+		"regType", regType,
+		"rawValues", rawValues,
+	).Debug("Read Registers")
+
+	return rawValues, nil
+}
+
 func (m *ModBusSession) ReadString(start, length uint16) (string, error) {
 	if m.Client == nil {
 		return "", fmt.Errorf("modbus client is nil")

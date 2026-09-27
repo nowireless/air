@@ -14,13 +14,31 @@ type Unit struct {
 
 	ID uint8
 
-	Registers []*Register
+	Registers      []*Register
+	RegisterRanges []*RegisterRange
 }
 
 type Register struct {
 	Name     string
 	Register uint16
 	Type     modbus.RegType
+
+	Value    any
+	RawValue uint16
+
+	Transform func(rawValue uint16) (any, error)
+}
+
+type RegisterRange struct {
+	Type modbus.RegType
+
+	StartRegister uint16
+
+	Registers []*RegisterRangeElement
+}
+
+type RegisterRangeElement struct {
+	Name string
 
 	Value    any
 	RawValue uint16
@@ -70,6 +88,10 @@ func testReadAll() {
 	//
 	// Gather all data
 	//
+	transformBannerHumidity := func(rawValue uint16) (any, error) {
+		return float64(rawValue) / 100.0, nil
+	}
+
 	transformBannerTemp := func(rawValue uint16) (any, error) {
 		return float64(int16(rawValue)) / 20.0, nil
 	}
@@ -96,20 +118,49 @@ func testReadAll() {
 		{
 			Name: "Banner S24",
 			ID:   1,
-			Registers: []*Register{
-				{Name: "input_humidity", Register: 0, Type: modbus.HOLDING_REGISTER, Transform: func(rawValue uint16) (any, error) { return float64(rawValue) / 100.0, nil }},
-				{Name: "input_temperature_c", Register: 1, Type: modbus.HOLDING_REGISTER, Transform: transformBannerTemp},
-				{Name: "input_temperature_f", Register: 2, Type: modbus.HOLDING_REGISTER, Transform: transformBannerTemp},
-				{Name: "input_pressure_dewpoint_c", Register: 3, Type: modbus.HOLDING_REGISTER, Transform: transformBannerDewPoint},
-				{Name: "input_pressure_dewpoint_f", Register: 4, Type: modbus.HOLDING_REGISTER, Transform: transformBannerDewPoint},
+			// Registers: []*Register{
+			// 	{Name: "input_humidity", Register: 0, Type: modbus.HOLDING_REGISTER, Transform: func(rawValue uint16) (any, error) { return float64(rawValue) / 100.0, nil }},
+			// 	{Name: "input_temperature_c", Register: 1, Type: modbus.HOLDING_REGISTER, Transform: transformBannerTemp},
+			// 	{Name: "input_temperature_f", Register: 2, Type: modbus.HOLDING_REGISTER, Transform: transformBannerTemp},
+			// 	{Name: "input_pressure_dewpoint_c", Register: 3, Type: modbus.HOLDING_REGISTER, Transform: transformBannerDewPoint},
+			// 	{Name: "input_pressure_dewpoint_f", Register: 4, Type: modbus.HOLDING_REGISTER, Transform: transformBannerDewPoint},
+			// },
+			RegisterRanges: []*RegisterRange{
+				{
+					Type:          modbus.HOLDING_REGISTER,
+					StartRegister: 0,
+					Registers: []*RegisterRangeElement{
+						{Name: "input_humidity", Transform: transformBannerHumidity},
+						{Name: "input_temperature_c", Transform: transformBannerTemp},
+						{Name: "input_temperature_f", Transform: transformBannerTemp},
+						{Name: "input_pressure_dewpoint_c", Transform: transformBannerDewPoint},
+						{Name: "input_pressure_dewpoint_f", Transform: transformBannerDewPoint},
+					},
+				},
 			},
 		},
 		{
 			Name: "Waveshare Analog 8ch",
 			ID:   3,
-			Registers: []*Register{
-				{Name: "input_pressure_psi", Register: 0, Type: modbus.INPUT_REGISTER, Transform: transformWaveSharePressureSensor},
-				{Name: "input_flow_sfcm", Register: 7, Type: modbus.INPUT_REGISTER, Transform: transformIFMSD6001Flow},
+			// Registers: []*Register{
+			// 	{Name: "input_pressure_psi", Register: 0, Type: modbus.INPUT_REGISTER, Transform: transformWaveSharePressureSensor},
+			// 	{Name: "input_flow_sfcm", Register: 7, Type: modbus.INPUT_REGISTER, Transform: transformIFMSD6001Flow},
+			// },
+			RegisterRanges: []*RegisterRange{
+				{
+					Type:          modbus.INPUT_REGISTER,
+					StartRegister: 0,
+					Registers: []*RegisterRangeElement{
+						{Name: "input_pressure_psi", Transform: transformWaveSharePressureSensor},
+						nil,
+						nil,
+						nil,
+						nil,
+						nil,
+						nil,
+						{Name: "input_flow_sfcm", Transform: transformIFMSD6001Flow},
+					},
+				},
 			},
 		},
 	}
@@ -147,6 +198,56 @@ func testReadAll() {
 				"rawValue", rawValue,
 				"value", register.Value,
 			)
+		}
+
+		for _, registerRange := range unit.RegisterRanges {
+			logCtx := logCtx.With(
+				"registerRange.Type", registerRange.Type,
+				"registerRange.StartRegister", registerRange.StartRegister,
+			)
+			logCtx.Debug("Reading Register range")
+
+			rawValues, err := m.ReadRegisters(
+				registerRange.StartRegister,
+				uint16(len(registerRange.Registers)),
+				registerRange.Type,
+			)
+
+			if err != nil {
+				logCtx.Error("Failed to read register", "err", err)
+				return
+			}
+
+			if len(rawValues) != len(registerRange.Registers) {
+				logCtx.With(
+					"len(rawValues)", len(rawValues),
+					"len(registerRange.Registers)", len(registerRange.Registers),
+				).Error("Unexpected number of raw values retrieved from device")
+				return
+			}
+
+			for i, register := range registerRange.Registers {
+				if register == nil {
+					logCtx.With(
+						"registerOffset", i,
+					).Debug("Skipping register")
+					continue
+				}
+
+				register.RawValue = rawValues[i]
+				register.Value, err = register.Transform(register.RawValue)
+				if err != nil {
+					logCtx.Error("Failed to transform raw value", "err", err)
+					return
+				}
+
+				logCtx.Debug("Read Register",
+					"name", register.Name,
+					"rawValue", register.RawValue,
+					"value", register.Value,
+				)
+			}
+
 		}
 		logCtx.Info("Done")
 	}
