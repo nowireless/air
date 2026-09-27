@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"log/slog"
+	"net/http"
 	"os"
 	"time"
 
@@ -30,8 +32,48 @@ func main() {
 
 	queue := make(chan *Metrics)
 
-	go Batcher(queue, time.Second, func(metrics []*Metrics) {
-		slog.Info("Batching!", "len(metrics)", len(metrics))
+	go Batcher(queue, time.Second, func(batch []*Metrics) {
+		slog.Info("Batching!", "len(batch)", len(batch))
+
+		//
+		// Build Payload
+		//
+
+		buf := bytes.NewBuffer(nil)
+		for _, metrics := range batch {
+			for _, s := range metrics.Samples {
+				if _, err := buf.WriteString(s.String() + "\n"); err != nil {
+					slog.Error("Failed to write sample to buffer")
+					return
+				}
+			}
+		}
+
+		//
+		// Send it!
+		//
+		resp, err := http.Post(
+			"http://localhost:8429/api/v1/import/prometheus",
+			"",
+			buf,
+		)
+		if err != nil {
+			slog.Error("Failed to send samples", "err", err)
+			return
+		}
+
+		if resp.StatusCode != http.StatusNoContent {
+			slog.With("resp.StatusCode", resp.StatusCode).Error("Received unexpected status code")
+
+			return
+		}
+
+		slog.With(
+			"resp.StatusCode", resp.StatusCode,
+		).Info("Pushed samples")
+
+		defer resp.Body.Close()
+
 	})
 
 	collectionTicker := time.NewTicker(200 * time.Millisecond)

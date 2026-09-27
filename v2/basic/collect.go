@@ -93,10 +93,12 @@ func collectMetrics(m *ModBusSession) (*Metrics, error) {
 	}
 
 	transformWaveSharePressureSensor := func(rawValue uint16) (float64, error) {
-		voltage := float64(rawValue / 1000.0)
+		voltage := float64(rawValue) / 1000.0
 
 		vcc := 5.0
-		return float64(250.0*(float64(voltage)/vcc) - 25.0), nil
+		return float64(
+			250.0*(voltage/vcc) - 25.0,
+		), nil
 	}
 
 	transformIFMSD6001Flow := func(rawValue uint16) (float64, error) {
