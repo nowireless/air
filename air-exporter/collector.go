@@ -87,7 +87,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	start := time.Now()
 
 	client, err := modbus.NewClient(&modbus.ClientConfiguration{
-		URL:     "tcp://192.168.2.188:502",
+		URL:     "tcp://192.168.2.190:502",
 		Timeout: 1 * time.Second,
 	})
 	defer client.Close()
